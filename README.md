@@ -25,10 +25,9 @@ Please note that the implementation `.cpp` files require access to private sourc
 
 ## [FuseMultiplyAddPass](FuseMultiplyAddPass.h)
 
-Searches for `OpFMul`s depended on solely by `OpFAdd`s. If neither operand is decorated with `NoContraction`, it replaces the two with a single `GLSL.std.450` `Fma` extended instruction.
+Searches for `OpFMul`s depended on solely by `OpFAdd`s (or `OpFSub`s via `OpFNegate`, if this feature is enabled). If neither operand is decorated with `NoContraction`, it replaces the two with a single `GLSL.std.450` `Fma` extended instruction.
 
 Does not support the OpenCL `fma` instruction, but can be trivially extended to do so.
-Does not support `OpFMul` + `OpFSub` combinations, but can be trivially extended to do so.
 
 # License
 
