@@ -15,12 +15,20 @@ And then, in your optimizer invocation, add it to your pass registration chain:
 ```cpp
 spvtools::Optimizer Opt(GTargetEnvironment);
 Opt.RegisterPerformancePasses()
-	.RegisterPass(CreatePessimisticLoopAnalysisPass())
-	.RegisterPass(std::make_unique<Optimizer::PassToken::Impl>(std::make_unique<spvtools::opt::FuseMultiplyAddPass>()))
+	.RegisterPass(std::make_unique<spvtools::Optimizer::PassToken::Impl>(std::make_unique<spvtools::opt::FuseMultiplyAddPass>()))
 	.Run(Words, Count, &OptimizedSPIRV);
 ```
 
 Please note that the implementation `.cpp` files require access to private sources of SPIRV-Tools, just like the original, internal optimizer passes.
+
+# Passes
+
+## [FuseMultiplyAddPass](FuseMultiplyAddPass.h)
+
+Searches for `OpFMul`s depended on solely by `OpFAdd`s. If neither operand is decorated with `NoContraction`, it replaces the two with a single `GLSL.std.450` `Fma` extended instruction.
+
+Does not support the OpenCL `fma` instruction, but can be trivially extended to do so.
+Does not support `OpFMul` + `OpFSub` combinations, but can be trivially extended to do so.
 
 # License
 
