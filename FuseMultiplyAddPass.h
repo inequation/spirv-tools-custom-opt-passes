@@ -31,23 +31,27 @@ SOFTWARE.
 namespace spvtools {
 namespace opt {
 
-class FuseMultiplyAddPass : public Pass {
- public:
-  const char* name() const override { return "fuse-multiply-add"; }
-  Pass::Status Process() override;
+class FuseMultiplyAddPass : public Pass
+{
+public:
+	/// If FuseFSubAsFNegateFAdd is true, FMul + FSub pairs will be substituted with FNegate + Fma (i.e. a * b + (-c), or (-a) * b + c).
+	FuseMultiplyAddPass(bool FuseFSubAsFNegateFAdd);
 
-  IRContext::Analysis GetPreservedAnalyses() override {
-    return IRContext::kAnalysisDecorations | IRContext::kAnalysisCombinators |
-           IRContext::kAnalysisCFG | IRContext::kAnalysisDominatorAnalysis |
-           IRContext::kAnalysisNameMap | IRContext::kAnalysisConstants |
-           IRContext::kAnalysisTypes;
-  }
+	const char* name() const override { return "fuse-multiply-add"; }
+	Pass::Status Process() override;
 
- private:
-  // Returns true if the module was changed.  The fuser is called on every
-  // instruction in |function| until nothing else in the function can be
-  // fused.
-  bool ProcessFunction(Function* function);
+	IRContext::Analysis GetPreservedAnalyses() override {
+		return IRContext::kAnalysisDecorations | IRContext::kAnalysisCombinators |
+			IRContext::kAnalysisCFG | IRContext::kAnalysisDominatorAnalysis |
+			IRContext::kAnalysisNameMap | IRContext::kAnalysisConstants |
+			IRContext::kAnalysisTypes;
+	}
+
+private:
+	// Returns true if the function was changed.
+	bool ProcessFunction(Function*);
+	
+	bool FuseFSubAsFNegateFAdd;
 };
 
 }  // namespace opt

@@ -31,16 +31,20 @@ SOFTWARE.
 
 namespace spvtools {
 namespace opt {
+	
+FuseMultiplyAddPass::FuseMultiplyAddPass(bool FuseFSubAsFNegateFAdd_)
+: FuseFSubAsFNegateFAdd(FuseFSubAsFNegateFAdd_)
+{}
 
 Pass::Status FuseMultiplyAddPass::Process()
 {
 	bool Modified = false;
 
-	for (Function& function : *get_module())
+	for (Function& Function : *get_module())
 	{
-		Modified |= ProcessFunction(&function);
+		Modified |= ProcessFunction(&Function);
 	}
-	return (Modified ? Status::SuccessWithChange : Status::SuccessWithoutChange);
+	return Modified ? Status::SuccessWithChange : Status::SuccessWithoutChange;
 }
 
 static bool IsIncontractible(analysis::DecorationManager& DecMgr, const Instruction& Inst)
@@ -48,14 +52,14 @@ static bool IsIncontractible(analysis::DecorationManager& DecMgr, const Instruct
 	return !DecMgr.WhileEachDecoration(Inst.result_id(), SpvDecorationNoContraction, [](const Instruction&) { return false; });
 }
 
-bool FuseMultiplyAddPass::ProcessFunction(Function* function)
+bool FuseMultiplyAddPass::ProcessFunction(Function* Function)
 {
 	bool Modified = false;
 	std::unordered_set<Instruction*> InstructionsToKill;
 	
 	const uint32_t GLSLInstSetId = context()->get_feature_mgr()->GetExtInstImportId_GLSLstd450();
 
-	cfg()->ForEachBlockInReversePostOrder(function->entry().get(), [&](BasicBlock* Block)
+	cfg()->ForEachBlockInReversePostOrder(Function->entry().get(), [&](BasicBlock* Block)
 	{
 		std::vector<Instruction*> Users;
 		for (Instruction* Inst = &*Block->begin(); Inst; Inst = Inst->NextNode())
@@ -72,10 +76,11 @@ bool FuseMultiplyAddPass::ProcessFunction(Function* function)
 			Users.clear();
 			get_def_use_mgr()->ForEachUser(Inst, [&IsFusable, &Users, this](Instruction* Use)
 			{
-				if (Use->opcode() != SpvOpFAdd || IsIncontractible(*context()->get_decoration_mgr(), *Use))
-					IsFusable = false;
-				else
+				if ((Use->opcode() == SpvOpFAdd || (Use->opcode() == SpvOpFSub && FuseFSubAsFNegateFAdd))
+					&& !IsIncontractible(*context()->get_decoration_mgr(), *Use))
 					Users.push_back(Use);
+				else
+					IsFusable = false;
 			});
 			IsFusable &= !Users.empty();
 			
@@ -83,9 +88,57 @@ bool FuseMultiplyAddPass::ProcessFunction(Function* function)
 				continue;
 			
 			Modified = true;
+			InstructionsToKill.insert(Inst);
+			InstructionsToKill.insert(Users.begin(), Users.end());
 			for (auto& User : Users)
 			{
+				// Identify whether we're a plain A * B + C, C - A * B, or an A + B - C variant.
+				enum { None, A, C } OperandToNegate = User->opcode() == SpvOpFAdd ? None :
+					User->GetSingleWordInOperand(0) == Inst->result_id() ? C : A;
+				
+				if (OperandToNegate == A)
+				{
+					// Create the negation instruction.
+					auto FNegate = std::make_unique<Instruction>(
+						context(),
+						SpvOpFNegate,
+						Inst->type_id(),
+						TakeNextId(),
+						Instruction::OperandList{ Operand{ SPV_OPERAND_TYPE_ID, { Inst->GetSingleWordInOperand(0) } } }
+					);
+					get_def_use_mgr()->AnalyzeInstDefUse(&*FNegate);
+					
+					// Replace the A operand with -A.
+					Inst->SetInOperands(Instruction::OperandList
+					{
+						Operand{ SPV_OPERAND_TYPE_ID, { FNegate->result_id() } },
+						Operand{ SPV_OPERAND_TYPE_ID, { Inst->GetSingleWordInOperand(1) } }
+					});
+					
+					// Insert into the instruction stream.
+					Inst->InsertBefore(std::move(FNegate));
+				}
+					
 				uint32_t COperand = User->GetSingleWordInOperand(0) == Inst->result_id() ? User->GetSingleWordInOperand(1) : User->GetSingleWordInOperand(0);
+				
+				if (OperandToNegate == C)
+				{
+					// Create the negation instruction.
+					auto FNegate = std::make_unique<Instruction>(
+						context(),
+						SpvOpFNegate,
+						Inst->type_id(),
+						TakeNextId(),
+						Instruction::OperandList{ Operand{ SPV_OPERAND_TYPE_ID, { COperand } } }
+					);
+					get_def_use_mgr()->AnalyzeInstDefUse(&*FNegate);
+					
+					COperand = FNegate->result_id();
+					
+					// Insert into the instruction stream.
+					User->InsertBefore(std::move(FNegate));
+				}
+				
 				Instruction::OperandList OpList
 				{
 					Operand{ SPV_OPERAND_TYPE_ID, { GLSLInstSetId } },
@@ -97,9 +150,6 @@ bool FuseMultiplyAddPass::ProcessFunction(Function* function)
 				auto Fma = std::make_unique<Instruction>(context(), SpvOpExtInst, Inst->type_id(), TakeNextId(), OpList);
 				get_def_use_mgr()->AnalyzeInstDefUse(&*Fma);
 				context()->ReplaceAllUsesWith(User->result_id(), Fma->result_id());
-				
-				InstructionsToKill.insert(Inst);
-				InstructionsToKill.insert(Users.begin(), Users.end());
 				
 				User->InsertBefore(std::move(Fma));
 			}
